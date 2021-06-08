@@ -10,79 +10,51 @@ stages:
         paths: [target/]
     interruptible: true
     timeout: 10m
+    parallel:
+      matrix:
+        - CHANNEL: [+stable, +beta, +nightly]
+    rules:
+        - if: $CHANNEL == "+stable"
+          allow_failure: false
+        - allow_failure: true
     before_script:
         - rustup --version && rustc --version && cargo --version
 
-test:stable:
+test:
     extends: .rust-default
     stage: check
     script:
-        - cargo +nightly test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
+        - cargo $CHANNEL test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
     artifacts:
         when: always
         reports:
             junit:
                 - results.xml
 
-test:beta:
-    extends: test:stable
-    allow_failure: true
-    script:
-        - cargo +beta test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
-
-test:nightly:
-    extends: test:stable
-    allow_failure: true
-    script:
-        - cargo +nightly test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
-
-bench:stable:
+bench:
     extends: .rust-default
     stage: check
     script:
-        - cargo +stable bench --verbose
+        - cargo $CHANNEL bench --verbose
     artifacts:
         when: always
         reports:
             metrics: metrics.txt
 
-bench:beta:
-    extends: bench:stable
-    allow_failure: true
-    script:
-        - cargo +beta bench --verbose
-
-bench:nightly:
-    extends: bench:stable
-    allow_failure: true
-    script:
-        - cargo +nightly bench --verbose
-
-clippy:stable:
+clippy:
     extends: .rust-default
     stage: check
     script:
-        - cargo +stable clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
+        - cargo $CHANNEL clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
     artifacts:
         when: always
         reports:
             codequality: gl-code-quality-report.json
 
-clippy:beta:
-    extends: clippy:stable
-    allow_failure: true
-    script:
-        - cargo +beta clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
-
-clippy:nightly:
-    extends: clippy:stable
-    allow_failure: true
-    script:
-        - cargo +nightly clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
-
 check:fmt:
     extends: .rust-default
     stage: check
+    parallel:
     script:
         - cargo fmt -- --check
     allow_failure: true
@@ -92,12 +64,14 @@ check:fmt:
 check:audit:
     extends: .rust-default
     stage: check
+    parallel:
     script:
         - cargo audit
 
 build:docs:
     extends: .rust-default
     stage: build
+    parallel:
     script:
         - cargo doc --no-deps
     artifacts:
@@ -109,7 +83,7 @@ build:docs:
 release:pages:
     stage: release
     image: alpine:latest
-    needs: [ "clippy:stable", "test:stable", "build:docs" ]
+    needs: [ "clippy", "test", "build:docs" ]
     variables:
         GIT_STRATEGY: none
     script:
@@ -124,7 +98,7 @@ release:pages:
 release:gitlab:
     stage: release
     image: registry.gitlab.com/gitlab-org/release-cli:latest
-    needs: ["clippy:stable", "test:stable"]
+    needs: ["clippy", "test"]
     variables:
         GIT_STRATEGY: none
     script:
