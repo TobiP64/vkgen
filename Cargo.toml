@@ -1,0 +1,17 @@
+[package]
+name        = "vkgen"
+license     = "MIT"
+version     = "2.2.0"
+authors     = ["Tobias Pfeiffer <tobias@tobiaspfeiffer.net>"]
+edition     = "2018"
+description = "Generates Rust source code from the Vulkan/OpenXR registry"
+repository  = "https://gitlab.com/TobiP64/vkgen"
+readme      = "README.md"
+keywords    = ["vulkan", "vk", "generator", "openxr", "xr"]
+categories  = ["command-line-utilities", "game-development"]
+
+[features]
+xml_dbg = []
+
+[dependencies]
+serde = { version = "^1.0", features = ["serde_derive"] }

@@ -1,0 +1,143 @@
+stages:
+    - check
+    - build
+    - release
+
+.rust-default:
+    image: registry.gitlab.com/tobip64/rust-ci-docker-image:latest
+    cache:
+        key: $CI_JOB_NAME
+        paths: [target/]
+    interruptible: true
+    timeout: 10m
+    before_script:
+        - rustup --version && rustc --version && cargo --version
+
+test:stable:
+    extends: .rust-default
+    stage: check
+    script:
+        - cargo +nightly test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
+    artifacts:
+        when: always
+        reports:
+            junit:
+                - results.xml
+
+test:beta:
+    extends: test:stable
+    allow_failure: true
+    script:
+        - cargo +beta test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
+
+test:nightly:
+    extends: test:stable
+    allow_failure: true
+    script:
+        - cargo +nightly test --verbose --all-features --no-fail-fast -- -Z unstable-options --format json | cargo2junit > results.xml
+
+bench:stable:
+    extends: .rust-default
+    stage: check
+    script:
+        - cargo +stable bench --verbose
+    artifacts:
+        when: always
+        reports:
+            metrics: metrics.txt
+
+bench:beta:
+    extends: bench:stable
+    allow_failure: true
+    script:
+        - cargo +beta bench --verbose
+
+bench:nightly:
+    extends: bench:stable
+    allow_failure: true
+    script:
+        - cargo +nightly bench --verbose
+
+clippy:stable:
+    extends: .rust-default
+    stage: check
+    script:
+        - cargo +stable clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
+    artifacts:
+        when: always
+        reports:
+            codequality: gl-code-quality-report.json
+
+clippy:beta:
+    extends: clippy:stable
+    allow_failure: true
+    script:
+        - cargo +beta clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
+
+clippy:nightly:
+    extends: clippy:stable
+    allow_failure: true
+    script:
+        - cargo +nightly clippy --verbose --all-targets --all-features --message-format=json | gitlab-clippy > gl-code-quality-report.json
+
+check:fmt:
+    extends: .rust-default
+    stage: check
+    script:
+        - cargo fmt -- --check
+    allow_failure: true
+    rules:
+        - if: $RUN_RUST_FMT
+
+check:audit:
+    extends: .rust-default
+    stage: check
+    script:
+        - cargo audit
+
+build:docs:
+    extends: .rust-default
+    stage: build
+    script:
+        - cargo doc --no-deps
+    artifacts:
+        paths:
+            - target/doc
+    rules:
+        - if: $CI_COMMIT_TAG
+
+release:pages:
+    stage: release
+    image: alpine:latest
+    needs: [ "clippy:stable", "test:stable", "build:docs" ]
+    variables:
+        GIT_STRATEGY: none
+    script:
+        - mv target/doc public/
+        - echo '<meta http-equiv="refresh" content="0; url={{ LIBRARY NAME }}">' > public/index.html
+    artifacts:
+        paths:
+            - public/
+    rules:
+        - if: $CI_COMMIT_TAG
+
+release:gitlab:
+    stage: release
+    image: registry.gitlab.com/gitlab-org/release-cli:latest
+    needs: ["clippy:stable", "test:stable"]
+    variables:
+        GIT_STRATEGY: none
+    script:
+        - release-cli create \
+            --name $CI_COMMIT_TAG \
+            --description $CI_COMMIT_MESSAGE \
+            --tag-name $CI_COMMIT_TAG \
+            --ref $CI_COMMIT_SHA
+    release:
+        name: $CI_COMMIT_TAG
+        description: './CHANGELOG.md'
+        tag_name: $CI_COMMIT_TAG
+        ref: $CI_COMMIT_SHA
+    rules:
+        - if: $CI_COMMIT_TAG
+          when: manual
