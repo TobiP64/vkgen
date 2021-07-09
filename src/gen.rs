@@ -273,10 +273,10 @@ impl std::fmt::Display for Type {
 	}
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug)]
 enum Value {
 	Literal(String, Rc<RefCell<Type>>),
+	#[allow(dead_code)]
 	Enum(Rc<KhrEnums>, usize)
 }
 
@@ -947,7 +947,7 @@ static PRIMITIVE_TYPES: &[&str] = &[
 ];
 
 static VK_BEGINNING: &str = r#"//! MACHINE GENERATED FILE, DO NOT EDIT
-#![feature(try_trait, const_fn, const_fn_transmute, stmt_expr_attributes)]
+#![feature(try_trait_v2, const_fn_transmute, stmt_expr_attributes)]
 #![warn(clippy::all)]
 #![allow(
 	non_snake_case,
@@ -962,7 +962,8 @@ static VK_BEGINNING: &str = r#"//! MACHINE GENERATED FILE, DO NOT EDIT
 	clippy::unnecessary_cast,
 	clippy::missing_safety_doc,
 	clippy::from_over_into,
-	clippy::upper_case_acronyms
+	clippy::upper_case_acronyms,
+	clippy::mixed_case_hex_literals
 )]
 
 use {
@@ -1088,6 +1089,20 @@ pub mod external {
 	
 	#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 	pub enum _screen_window {}
+	
+	pub struct StdVideoH264ProfileIdc;
+	pub struct StdVideoH264SequenceParameterSet;
+	pub struct StdVideoH264PictureParameterSet;
+	pub struct StdVideoDecodeH264PictureInfo;
+	pub struct StdVideoDecodeH264ReferenceInfo;
+	pub struct StdVideoDecodeH264Mvc;
+	pub struct StdVideoEncodeH264PictureInfo;
+	pub struct StdVideoEncodeH264SliceHeader;
+	pub struct StdVideoH265ProfileIdc;
+	pub struct StdVideoH265SequenceParameterSet;
+	pub struct StdVideoH265PictureParameterSet;
+	pub struct StdVideoDecodeH265PictureInfo;
+	pub struct StdVideoDecodeH265ReferenceInfo;
 }
 
 pub const VK_NULL_HANDLE        : u64 = 0;
@@ -1103,24 +1118,51 @@ const LIB: &str = "libvulkan.so.1";
 #[cfg(windows)]
 const LIB: &str = "vulkan-1.dll";
 
+impl<T, E: From<VkResult>> std::ops::FromResidual<VkResult> for Result<T, E> {
+	fn from_residual(r: VkResult) -> Self {
+		Err(r.into())
+	}
+}
+
+impl<T, E: Into<VkResult>> std::ops::FromResidual<Result<T, E>> for VkResult {
+	fn from_residual(r: Result<T, E>) -> Self {
+		match r {
+			Ok(_) => VK_SUCCESS,
+			Err(v) => v.into()
+		}
+	}
+}
+
+impl ops::FromResidual<VkResult> for VkResult {
+	fn from_residual(residual: VkResult) -> Self {
+		residual
+	}
+}
+
 impl ops::Try for VkResult {
-	type Ok = VkResult;
-	type Error = VkResult;
+	type Output = Self;
+	type Residual = Self;
 	
-	fn into_result(self) -> Result<Self::Ok, Self::Error> {
+	fn from_output(output: Self::Output) -> Self {
+		output
+	}
+	
+	fn branch(self) -> ops::ControlFlow<Self::Residual, Self::Output> {
+		if self as i32 >= 0 {
+			ops::ControlFlow::Continue(self)
+		} else {
+			ops::ControlFlow::Break(self)
+		}
+	}
+}
+
+impl Into<Result<Self, Self>> for VkResult {
+	fn into(self) -> Result<VkResult, VkResult> {
 		if self as i32 >= 0 {
 			Ok(self)
 		} else {
 			Err(self)
 		}
-	}
-	
-	fn from_error(v: Self::Error) -> Self {
-		v
-	}
-	
-	fn from_ok(v: Self::Ok) -> Self {
-		v
 	}
 }
 
@@ -1131,10 +1173,11 @@ impl fmt::Display for VkResult {
 		fmt::Debug::fmt(self, f)
 	}
 }
+
 "#;
 
 static XR_BEGINNING: &str = r#"//! MACHINE GENERATED FILE, DO NOT EDIT
-#![feature(try_trait, const_fn, const_fn_transmute, stmt_expr_attributes)]
+#![feature(try_trait_v2, const_fn_transmute, stmt_expr_attributes)]
 #![warn(clippy::all)]
 #![allow(
 	non_snake_case,
@@ -1158,6 +1201,7 @@ use {
 	self::external::*,
 	vk::*,
 };
+
 pub use types::*;
 
 /// Contains some useful types
@@ -1270,24 +1314,51 @@ const LIB: &str = "libopenxr.so.1";
 #[cfg(windows)]
 const LIB: &str = "openxr-1.dll";
 
+impl<T, E: From<XrResult>> std::ops::FromResidual<XrResult> for Result<T, E> {
+	fn from_residual(r: XrResult) -> Self {
+		Err(r.into())
+	}
+}
+
+impl<T, E: Into<XrResult>> std::ops::FromResidual<Result<T, E>> for XrResult {
+	fn from_residual(r: Result<T, E>) -> Self {
+		match r {
+			Ok(_) => VK_SUCCESS,
+			Err(v) => v.into()
+		}
+	}
+}
+
+impl ops::FromResidual<XrResult> for XrResult {
+	fn from_residual(residual: XrResult) -> Self {
+		residual
+	}
+}
+
 impl ops::Try for XrResult {
-	type Ok = XrResult;
-	type Error = XrResult;
+	type Output = Self;
+	type Residual = Self;
 	
-	fn into_result(self) -> Result<Self::Ok, Self::Error> {
+	fn from_output(output: Self::Output) -> Self {
+		output
+	}
+	
+	fn branch(self) -> ops::ControlFlow<Self::Residual, Self::Output> {
+		if self as i32 >= 0 {
+			ops::ControlFlow::Continue(self)
+		} else {
+			ops::ControlFlow::Break(self)
+		}
+	}
+}
+
+impl Into<Result<Self, Self>> for XrResult {
+	fn into(self) -> Result<XrResult, XrResult> {
 		if self as i32 >= 0 {
 			Ok(self)
 		} else {
 			Err(self)
 		}
-	}
-	
-	fn from_error(v: Self::Error) -> Self {
-		v
-	}
-	
-	fn from_ok(v: Self::Ok) -> Self {
-		v
 	}
 }
 

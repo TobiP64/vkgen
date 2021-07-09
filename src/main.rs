@@ -20,11 +20,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use {self::{RegistryElement::*, parse::*}, std::{io::{self, {Read, Seek, SeekFrom, Write}}, fs::{File, OpenOptions}}};
+use {vkgen::*, std::{io::{self, Write}, fs::{File, OpenOptions}}};
 
-mod xml;
-mod parse;
-mod gen;
+//mod xml;
+//mod parse;
+//mod gen;
 
 const HELP: &str = r#"
 vkgen
@@ -66,7 +66,7 @@ fn main() {
 		}
 	}
 	
-	let Registry { api, vec, exts, consts }: Registry = match &file_in {
+	let r = match &file_in {
 		Some(file_in) => {
 			print!("parsing file `{}` ... ", file_in);
 			std::io::stdout().flush().unwrap_or_default();
@@ -79,19 +79,18 @@ fn main() {
 			std::io::stdout().flush().unwrap_or_default();
 			xml::deserialize(io::BufReader::new(io::stdin()))
 		}
-	}.expect("failed to parse registry");
+	};
 	
-	let iter = match api {
-		Api::Vulkan => get_vk_items(),
-		Api::OpenXr => get_xr_items()
-	}.into_iter()
-		.chain(vec.into_iter())
-		.chain(std::iter::once(Enums(KhrEnums {
-			name:    "Extension Constants".to_string(),
-			r#type:  KhrEnumsType::None,
-			comment: None,
-			enums:   consts
-		})));
+	let Registry { api, elements, exts } = match r {
+		Ok(v) => {
+			println!("\x1b[32mok\x1b[0m");
+			v
+		}
+		Err(e) => {
+			println!("\x1b[31mfailed\x1b[0m\nError: {}", e);
+			std::process::exit(100);
+		}
+	};
 	
 	let file_out = file_out
 		.or_else(|| file_in.as_ref().map(|s| s.replace(".xml", ".rs")))
@@ -99,16 +98,24 @@ fn main() {
 			Api::Vulkan => "vk.rs",
 			Api::OpenXr => "xr.rs"
 		}.to_string());
-	print!("\x1b[32mok\x1b[0m\ngenerating code (dst: `{}`) ... ", &file_out);
+	
+	print!("generating code (dst: `{}`) ... ", &file_out);
 	std::io::stdout().flush().unwrap_or_default();
 	
-	OpenOptions::new()
+	let r = OpenOptions::new()
 		.write(true)
 		.create(true)
 		.truncate(true)
 		.open(&file_out)
-		.and_then(|writer| gen::gen(&mut io::BufWriter::new(writer), iter, api, true))
-		.expect("failed output generated code");
+		.and_then(|writer| gen::gen(&mut io::BufWriter::new(writer), elements.into_iter(), api, true));
+	
+	match r {
+		Ok(()) => println!("\x1b[32mok\x1b[0m"),
+		Err(e) => {
+			println!("\x1b[31mfailed\x1b[0m\nError: {}", e);
+			std::process::exit(100);
+		}
+	}
 	
 	let file_out_cargo = file_out_cargo
 		.or_else(|| file_in.as_ref().map(|s| s.replace(".xml", ".toml")))
@@ -116,205 +123,36 @@ fn main() {
 			Api::Vulkan => "vk.toml",
 			Api::OpenXr => "xr.toml"
 		}.to_string());
-	print!("\x1b[32mok\x1b[0m\ngenerating cargo file (dst: `{}`) ... ", &file_out_cargo);
 	
-	OpenOptions::new()
+	print!("generating cargo file (dst: `{}`) ... ", &file_out_cargo);
+	std::io::stdout().flush().unwrap_or_default();
+	
+	let r = OpenOptions::new()
 		.write(true)
 		.create(true)
 		.truncate(true)
 		.open(&file_out_cargo)
-		.and_then(|writer| gen::gen_cargo(&mut io::BufWriter::new(writer), exts))
-		.expect("failed output generated cargo file");
+		.and_then(|writer| gen::gen_cargo(&mut io::BufWriter::new(writer), exts));
 	
-	println!("\x1b[32mok\x1b[0m");
-	
-	if BITFIELDS.load(std::sync::atomic::Ordering::Relaxed) {
-		println!("WARN: the registry contained C bitfield structs, these structs were not generated correctly! See the README for more information.");
+	match r {
+		Ok(()) => println!("\x1b[32mok\x1b[0m"),
+		Err(e) => {
+			println!("\x1b[31mfailed\x1b[0m\nError: {}", e);
+			std::process::exit(100);
+		}
 	}
 	
-	let mut buf = String::new();
+	if BITFIELDS.load(std::sync::atomic::Ordering::Relaxed) {
+		println!("WARN: the registry contains C bitfield structs, these structs are not generated correctly! See the README for more information.");
+	}
 	
-	let mut f = OpenOptions::new()
-		.read(true)
-		.write(true)
-		.open(&file_out)
-		.unwrap();
-	
-	f.read_to_string(&mut buf).unwrap();
-	
-	let buf = buf.replace("&()", if api == Api::Vulkan { "VkAnyRef" } else { "XrAnyRef" })
-		.replace("&'a ()", if api == Api::Vulkan { "VkAnyRef<'a>" } else { "XrAnyRef<'a>" })
-		.replace("&mut ()", if api == Api::Vulkan { "VkAnyMut" } else { "XrAnyMut" })
-		.replace("&'a mut ()", if api == Api::Vulkan { "VkAnyMut<'a>" } else { "XrAnyMut<'a>" })
-		.replace("&[()]", "&[u8]")
-		.replace("&mut [()]", "&mut [u8]")
-		.replace("&'a [()]", "&'a [u8]")
-		.replace("&'a mut [()]", "&'a mut [u8]");
-	
-	f.seek(SeekFrom::Start(0)).unwrap();
-	f.write_all(buf.as_bytes()).unwrap();
-}
-
-fn get_vk_items() -> Vec<RegistryElement> {
-	vec![
-		Macro {
-			name: "VK_MAKE_VERSION".to_string(),
-			content: "(major: u32, minor: u32, patch: u32) -> u32 { (major << 22) | (minor << 12) | patch }".to_string()
-		},
-		Macro {
-			name: "VK_VERSION_MAJOR".to_string(),
-			content: "(version: u32) -> u32 { version >> 22 }".to_string()
-		},
-		Macro {
-			name: "VK_VERSION_MINOR".to_string(),
-			content: "(version: u32) -> u32 { version >> 12 & 0x3ff }".to_string()
-		},
-		Macro {
-			name: "VK_VERSION_PATCH".to_string(),
-			content: "(version: u32) -> u32 { version & 0xfff }".to_string()
-		},
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkInternalAllocationNotification".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationType".to_string(),  r#type: "VkInternalAllocationType".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkInternalFreeNotification".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationType".to_string(),  r#type: "VkInternalAllocationType".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkReallocationFunction".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pOriginal".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "alignment".to_string(),       r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkAllocationFunction".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "alignment".to_string(),       r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkFreeFunction".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pUserData".to_string(), r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pMemory".to_string(),   r#type: "*const u8".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkVoidFunction".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  Vec::new()
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkDebugReportCallbackEXT".to_string(),
-			comment: None,
-			result:  "VkBool32".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "flags".to_string(),        r#type: "VkDebugReportFlagsEXT".to_string(), ..Default::default() },
-				KhrCommandParam { name: "objectType".to_string(),   r#type: "VkDebugReportObjectTypeEXT".to_string(), ..Default::default() },
-				KhrCommandParam { name: "object".to_string(),       r#type: "u64".to_string(), ..Default::default() },
-				KhrCommandParam { name: "location".to_string(),     r#type: "usize".to_string(), ..Default::default() },
-				KhrCommandParam { name: "messageCode".to_string(),  r#type: "i32".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pLayerPrefix".to_string(), r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pMessage".to_string(),     r#type: "*const u8".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pUserData".to_string(),    r#type: "*const u8".to_string(), ..Default::default() }
-			]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_vkDebugUtilsMessengerCallbackEXT".to_string(),
-			comment: None,
-			result:  "VkBool32".to_string(),
-			params:  vec![KhrCommandParam { name: "messageSeverity".to_string(), r#type: "VkDebugUtilsMessageSeverityFlagBitsEXT".to_string(), ..Default::default() },
-						  KhrCommandParam { name: "messageTypes".to_string(),    r#type: "VkDebugUtilsMessageTypeFlagsEXT".to_string(), ..Default::default() },
-						  KhrCommandParam { name: "pCallbackData".to_string(),   r#type: "*const VkDebugUtilsMessengerCallbackDataEXT".to_string(), ..Default::default() },
-						  KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() }]
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name: "PFN_vkDeviceMemoryReportCallbackEXT".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  vec![
-				KhrCommandParam { name: "pCallbackData".to_string(), r#type: "*const VkDeviceMemoryReportCallbackDataEXT".to_string(), ..Default::default() },
-				KhrCommandParam { name: "pUserData".to_string(),     r#type: "*mut u8".to_string(), ..Default::default() }
-			]
-		}))
-	]
-}
-
-fn get_xr_items() -> Vec<RegistryElement> {
-	vec![
-		Macro {
-			name: "XR_MAKE_VERSION".to_string(),
-			content: "(major: u64, minor: u64, patch: u64) -> XrVersion { (major & 0xffff << 48) | (minor & 0xffff << 32) | (patch & 0xffffffff) }".to_string()
-		},
-		Macro {
-			name: "XR_VERSION_MAJOR".to_string(),
-			content: "(version: XrVersion) -> u64 { version >> 48 & 0xffff }".to_string()
-		},
-		Macro {
-			name: "XR_VERSION_MINOR".to_string(),
-			content: "(version: XrVersion) -> u64 { version >> 32 & 0xffff }".to_string()
-		},
-		Macro {
-			name: "XR_VERSION_PATCH".to_string(),
-			content: "(version: XrVersion) -> u64 { version & 0xffffffff }".to_string()
-		},
-		Macro {
-			name: "XR_SUCCEEDED".to_string(),
-			content: "(result: XrResult) -> bool { result as i32 >= 0 }".to_string()
-		},
-		Macro {
-			name: "XR_UNQUALIFIED_SUCCESS".to_string(),
-			content: "(result: XrResult) -> bool { result as i32 == 0 }".to_string()
-		},
-		Macro {
-			name: "XR_FAILED".to_string(),
-			content: "(result: XrResult) -> bool { (result as i32) < 0 }".to_string()
-		},
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_xrVoidFunction".to_string(),
-			comment: None,
-			result:  "()".to_string(),
-			params:  Vec::new()
-		})),
-		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
-			name:    "PFN_xrDebugUtilsMessengerCallbackEXT".to_string(),
-			comment: None,
-			result:  "XrBool32".to_string(),
-			params:  vec![
-				KhrCommandParam { r#type: "XrDebugUtilsMessageSeverityFlagsEXT".to_string(),         name: "messageSeverity".to_string(), ..Default::default() },
-				KhrCommandParam { r#type: "XrDebugUtilsMessageTypeFlagsEXT".to_string(),             name: "messageTypes".to_string(), ..Default::default() },
-				KhrCommandParam { r#type: "*const XrDebugUtilsMessengerCallbackDataEXT".to_string(), name: "callbackData".to_string(), ..Default::default() },
-				KhrCommandParam { r#type: "*const u8".to_string(),                                   name: "pUserData".to_string(), ..Default::default() },
-			]
-		})),
-	]
+	print!("fixing pointer types ... ");
+	std::io::stdout().flush().unwrap_or_default();
+	match vkgen::fix_ptr_types(api, &file_out) {
+		Ok(()) => println!("\x1b[32mok\x1b[0m"),
+		Err(e) => {
+			println!("\x1b[31mfailed\x1b[0m\nError: {}", e);
+			std::process::exit(100);
+		}
+	}
 }

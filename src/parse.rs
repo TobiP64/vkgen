@@ -31,10 +31,9 @@ pub enum Api {
 }
 
 pub struct Registry {
-	pub api:    Api,
-	pub vec:    Vec<RegistryElement>,
-	pub exts:   Vec<(String, Vec<String>)>,
-	pub consts: Vec<KhrEnumsVariant>
+	pub api:      Api,
+	pub elements: Vec<RegistryElement>,
+	pub exts:     Vec<(String, Vec<String>)>
 }
 
 #[derive(Debug)]
@@ -319,16 +318,16 @@ impl<'de> Deserialize<'de> for Registry {
 	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error>  {
 		use KhrRequireEnumVal::*;
 		
-		let registry = Vec::<KhrRegistryVariant>::deserialize(deserializer)?;
-		let mut api = None;
-		let mut vec = Vec::new();
+		let registry   = Vec::<KhrRegistryVariant>::deserialize(deserializer)?;
+		let mut api    = None;
+		let mut elements = Vec::new();
 		let mut consts = Vec::new();
-		let mut exts = Vec::new();
+		let mut exts   = Vec::new();
 		
 		for e in registry {
 			match e {
-				KhrRegistryVariant::Comment(v) => vec.push(RegistryElement::Comment(v.value)),
-				KhrRegistryVariant::Types(types) => vec.extend(types.into_iter()
+				KhrRegistryVariant::Comment(v) => elements.push(RegistryElement::Comment(v.value)),
+				KhrRegistryVariant::Types(types) => elements.extend(types.into_iter()
 					.map(|r#type| match r#type {
 						KhrTypesVariants::Comment(v) => RegistryElement::Comment(v.into()),
 						KhrTypesVariants::Type(r#type) => RegistryElement::Type(r#type)
@@ -348,9 +347,9 @@ impl<'de> Deserialize<'de> for Registry {
 						}
 					}
 					
-					vec.push(Enums(enums))
+					elements.push(Enums(enums))
 				}
-				KhrRegistryVariant::Commands(commands) => vec.extend(
+				KhrRegistryVariant::Commands(commands) => elements.extend(
 					commands.iter().map(|e| match e {
 						KhrCommandsVariant::Command(KhrCommand::Alias { name, alias, comment, feature }) => {
 							let mut alias = alias;
@@ -400,7 +399,7 @@ impl<'de> Deserialize<'de> for Registry {
 							})
 						});
 					
-					vec.iter_mut().for_each(|e| match e {
+					elements.iter_mut().for_each(|e| match e {
 						RegistryElement::Enums(ref mut enums) => extensions.iter()
 							.flat_map(|ext| ext.require.iter().map(move |e| (ext, e)))
 							.flat_map(|(ext, req)| req.iter().map(move |e| (ext, e)))
@@ -452,7 +451,7 @@ impl<'de> Deserialize<'de> for Registry {
 							})
 						});
 					
-					vec.iter_mut().for_each(|e| match e {
+					elements.iter_mut().for_each(|e| match e {
 						RegistryElement::Enums(ref mut enums) => feature.require.iter()
 							.flat_map(|req| req.iter())
 							.for_each(|e| match e {
@@ -492,7 +491,21 @@ impl<'de> Deserialize<'de> for Registry {
 		
 		let api = api.expect("cannot determine API type");
 		
-		Ok(Self { api, vec, exts, consts })
+		// extension constants are handled like an enum
+		elements.push(Enums(KhrEnums {
+			name:    "Extension Constants".to_string(),
+			r#type:  KhrEnumsType::None,
+			comment: None,
+			enums:   consts
+		}));
+		
+		// HACK: Add registry elements that can not be parsed reliably manually
+		match api {
+			Api::Vulkan => elements.extend(get_vk_items().into_iter()),
+			Api::OpenXr => elements.extend(get_xr_items().into_iter())
+		}
+		
+		Ok(Self { api, elements, exts })
 	}
 }
 
@@ -943,7 +956,7 @@ fn parse_array(ty: &str, outer: &str) -> String {
 }
 
 /// converts C-style values to Rust-style values (e.g.: 1ULL -> 1u64)
-pub fn convert_c_value(name: &str) -> String {
+fn convert_c_value(name: &str) -> String {
 	if name.starts_with('\"') && name.ends_with('\"') {
 		let mut name = String::from(name);
 		name.insert(0, 'b');
@@ -965,7 +978,7 @@ pub fn convert_c_value(name: &str) -> String {
 			} else if i + 1 < name.len() && name[i + 1] == b'U' {
 				s.push_str("u32");
 				i += 1;
-			} else if i + 1 < name.len() && name[i + 1] == b'f' {
+			} else if i + 1 < name.len() && (name[i + 1] == b'f' || name[i + 1] == b'F') {
 				s.push_str("f32");
 				i += 1;
 			}
@@ -980,7 +993,7 @@ pub fn convert_c_value(name: &str) -> String {
 }
 
 /// converts names that contain Rust keywords (e.g.: type -> r#type)
-pub fn convert_name(name: &str) -> String {
+fn convert_name(name: &str) -> String {
 	match name {
 		name if KEYWORDS.contains(&name) => format!("r#{}", name),
 		name => name.to_string()
@@ -1061,3 +1074,167 @@ static KEYWORDS: [&str; 50] = [
 	"virtual",
 	"yield"
 ];
+
+fn get_vk_items() -> Vec<RegistryElement> {
+	vec![
+		Macro {
+			name: "VK_MAKE_VERSION".to_string(),
+			content: "(major: u32, minor: u32, patch: u32) -> u32 { (major << 22) | (minor << 12) | patch }".to_string()
+		},
+		Macro {
+			name: "VK_VERSION_MAJOR".to_string(),
+			content: "(version: u32) -> u32 { version >> 22 }".to_string()
+		},
+		Macro {
+			name: "VK_VERSION_MINOR".to_string(),
+			content: "(version: u32) -> u32 { version >> 12 & 0x3ff }".to_string()
+		},
+		Macro {
+			name: "VK_VERSION_PATCH".to_string(),
+			content: "(version: u32) -> u32 { version & 0xfff }".to_string()
+		},
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkInternalAllocationNotification".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationType".to_string(),  r#type: "VkInternalAllocationType".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkInternalFreeNotification".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationType".to_string(),  r#type: "VkInternalAllocationType".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkReallocationFunction".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pOriginal".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "alignment".to_string(),       r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkAllocationFunction".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "size".to_string(),            r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "alignment".to_string(),       r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "allocationScope".to_string(), r#type: "VkSystemAllocationScope".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkFreeFunction".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pUserData".to_string(), r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pMemory".to_string(),   r#type: "*const u8".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkVoidFunction".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  Vec::new()
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkDebugReportCallbackEXT".to_string(),
+			comment: None,
+			result:  "VkBool32".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "flags".to_string(),        r#type: "VkDebugReportFlagsEXT".to_string(), ..Default::default() },
+				KhrCommandParam { name: "objectType".to_string(),   r#type: "VkDebugReportObjectTypeEXT".to_string(), ..Default::default() },
+				KhrCommandParam { name: "object".to_string(),       r#type: "u64".to_string(), ..Default::default() },
+				KhrCommandParam { name: "location".to_string(),     r#type: "usize".to_string(), ..Default::default() },
+				KhrCommandParam { name: "messageCode".to_string(),  r#type: "i32".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pLayerPrefix".to_string(), r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pMessage".to_string(),     r#type: "*const u8".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pUserData".to_string(),    r#type: "*const u8".to_string(), ..Default::default() }
+			]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_vkDebugUtilsMessengerCallbackEXT".to_string(),
+			comment: None,
+			result:  "VkBool32".to_string(),
+			params:  vec![KhrCommandParam { name: "messageSeverity".to_string(), r#type: "VkDebugUtilsMessageSeverityFlagBitsEXT".to_string(), ..Default::default() },
+						  KhrCommandParam { name: "messageTypes".to_string(),    r#type: "VkDebugUtilsMessageTypeFlagsEXT".to_string(), ..Default::default() },
+						  KhrCommandParam { name: "pCallbackData".to_string(),   r#type: "*const VkDebugUtilsMessengerCallbackDataEXT".to_string(), ..Default::default() },
+						  KhrCommandParam { name: "pUserData".to_string(),       r#type: "*const u8".to_string(), ..Default::default() }]
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name: "PFN_vkDeviceMemoryReportCallbackEXT".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  vec![
+				KhrCommandParam { name: "pCallbackData".to_string(), r#type: "*const VkDeviceMemoryReportCallbackDataEXT".to_string(), ..Default::default() },
+				KhrCommandParam { name: "pUserData".to_string(),     r#type: "*mut u8".to_string(), ..Default::default() }
+			]
+		}))
+	]
+}
+
+fn get_xr_items() -> Vec<RegistryElement> {
+	vec![
+		Macro {
+			name: "XR_MAKE_VERSION".to_string(),
+			content: "(major: u64, minor: u64, patch: u64) -> XrVersion { (major & 0xffff << 48) | (minor & 0xffff << 32) | (patch & 0xffffffff) }".to_string()
+		},
+		Macro {
+			name: "XR_VERSION_MAJOR".to_string(),
+			content: "(version: XrVersion) -> u64 { version >> 48 & 0xffff }".to_string()
+		},
+		Macro {
+			name: "XR_VERSION_MINOR".to_string(),
+			content: "(version: XrVersion) -> u64 { version >> 32 & 0xffff }".to_string()
+		},
+		Macro {
+			name: "XR_VERSION_PATCH".to_string(),
+			content: "(version: XrVersion) -> u64 { version & 0xffffffff }".to_string()
+		},
+		Macro {
+			name: "XR_SUCCEEDED".to_string(),
+			content: "(result: XrResult) -> bool { result as i32 >= 0 }".to_string()
+		},
+		Macro {
+			name: "XR_UNQUALIFIED_SUCCESS".to_string(),
+			content: "(result: XrResult) -> bool { result as i32 == 0 }".to_string()
+		},
+		Macro {
+			name: "XR_FAILED".to_string(),
+			content: "(result: XrResult) -> bool { (result as i32) < 0 }".to_string()
+		},
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_xrVoidFunction".to_string(),
+			comment: None,
+			result:  "()".to_string(),
+			params:  Vec::new()
+		})),
+		Type(KhrType::FuncPtr(KhrTypeFuncPtr {
+			name:    "PFN_xrDebugUtilsMessengerCallbackEXT".to_string(),
+			comment: None,
+			result:  "XrBool32".to_string(),
+			params:  vec![
+				KhrCommandParam { r#type: "XrDebugUtilsMessageSeverityFlagsEXT".to_string(),         name: "messageSeverity".to_string(), ..Default::default() },
+				KhrCommandParam { r#type: "XrDebugUtilsMessageTypeFlagsEXT".to_string(),             name: "messageTypes".to_string(), ..Default::default() },
+				KhrCommandParam { r#type: "*const XrDebugUtilsMessengerCallbackDataEXT".to_string(), name: "callbackData".to_string(), ..Default::default() },
+				KhrCommandParam { r#type: "*const u8".to_string(),                                   name: "pUserData".to_string(), ..Default::default() },
+			]
+		})),
+	]
+}
