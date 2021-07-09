@@ -34,15 +34,17 @@
 //! 		fs::OpenOptions::new()
 //! 			.write(true)
 //! 			.open("vk.rs")
-//! 			.map(io::BufWriter::new),
+//! 			.map(io::BufWriter::new)
+//! 			.expect("failed to open output file"),
 //! 		fs::OpenOptions::new()
 //! 			.write(true)
 //! 			.open("vk.toml")
-//! 			.map(io::BufWriter::new),
+//! 			.map(io::BufWriter::new)
+//! 			.expect("failed to open output file"),
 //! 		true
 //! 	).unwrap();
 //!
-//! 	vkgen::fix_ptr_types(api, "vk.rs")
+//! 	vkgen::fix_ptr_types(vkgen::Api::Vulkan, "vk.rs")
 //! 		.expect("failed to fix pointer types");
 //! }
 //! ```
@@ -60,7 +62,8 @@
 //! 	gen(&mut fs::OpenOptions::new()
 //! 		.write(true)
 //! 		.open("vk.rs")
-//! 		.map(io::BufWriter::new), elements, api, true)
+//! 		.map(io::BufWriter::new)
+//! 		.expect("failed to open input file"), elements, api, true)
 //! 		.expect("failed to write the generated code");
 //!
 //! 	gen_cargo(&mut fs::OpenOptions::new()

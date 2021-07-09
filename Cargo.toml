@@ -10,6 +10,9 @@ readme      = "README.md"
 keywords    = ["vulkan", "vk", "generator", "openxr", "xr"]
 categories  = ["command-line-utilities", "game-development"]
 
+[lib]
+doctest = false
+
 [features]
 xml_dbg = []
 
