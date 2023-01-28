@@ -1,8 +1,0 @@
-include: https://gitlab.com/TobiP64/rust-gitlab-ci/-/raw/master/rust.gitlab-ci.yml
-
-build:
-    parallel:
-        matrix:
-            -   CHANNEL: [ stable, beta, nightly ]
-                PROFILE: [ debug, release ]
-                TARGET: [ x86_64-unknown-linux-musl ]

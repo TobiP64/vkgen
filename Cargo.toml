@@ -1,9 +1,9 @@
 [package]
 name        = "vkgen"
 license     = "MIT"
-version     = "2.2.1"
-authors     = ["Tobias Pfeiffer <tobias@tobiaspfeiffer.net>"]
-edition     = "2018"
+version     = "2.3.0"
+authors     = ["Tobias Pfeiffer <tobias.pfeiffer@3d7eed74.net>"]
+edition     = "2021"
 description = "Generates Rust source code from the Vulkan/OpenXR registry"
 repository  = "https://gitlab.com/TobiP64/vkgen"
 readme      = "README.md"
